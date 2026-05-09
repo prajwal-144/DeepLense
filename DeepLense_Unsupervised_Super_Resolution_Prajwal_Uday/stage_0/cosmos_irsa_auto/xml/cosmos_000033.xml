@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<result status="ok">
+  <description>
+     <collection>COSMOS</collection>
+     <ra>150.130250</ra>
+     <dec>2.370480</dec>
+     <regSize>0.001389</regSize>
+     <radunits>degrees</radunits>
+  </description>
+  <summary>
+     <resultHtml>
+       https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/index.html
+     </resultHtml>
+     <counts>
+        <cutoutsN> 1 </cutoutsN>
+        <skipN> 0 </skipN>
+     </counts>
+     <downloadScript>
+        <fits> https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/wget_fits_cutouts.bat </fits>
+        <jpg> https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/wget_jpg_cutouts.bat </jpg>
+     </downloadScript>
+  </summary>
+  <images>
+     <counts>1</counts>
+     <metadata>
+        https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/result.tbl
+     </metadata>
+     <metadataHTML>
+        https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/result.html
+     </metadataHTML>
+     <cutouts>
+        <fits> https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/results/acs_mosaic_2.0/0001_150.13025000_2.37048000_acs_I_mosaic_30mas_sci.fits
+ </fits>
+        <jpg> https://irsa.ipac.caltech.edu:443/workspace/TMP_ygEXd9_3236566/Cutouts/150.130246_2.370477_eq_j2000.v0001/results/acs_mosaic_2.0/0001_150.13025000_2.37048000_acs_I_mosaic_30mas_sci.jpg
+ </jpg>
+     </cutouts>
+  </images>
+</result>
+
