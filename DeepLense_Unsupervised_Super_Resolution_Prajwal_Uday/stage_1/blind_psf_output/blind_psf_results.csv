@@ -1,0 +1,6 @@
+image_id,fwhm_px,fwhm_arcsec,centroid_offset,kernel_raw_sum,kernel_sum,kernel_min,deconv_ssim
+sample1,3.221,0.541,0.023,1.03169,1.0,0.0,0.9563
+sample2,3.317,0.557,0.06,1.026867,1.0,0.0,0.9567
+sample3,3.401,0.571,0.09,1.016741,1.0,0.0,0.9565
+sample4,2.941,0.494,0.139,1.048977,1.0,0.0,0.9428
+sample5,3.553,0.597,0.108,1.017162,1.0,0.0,0.963
