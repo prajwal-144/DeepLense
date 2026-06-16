@@ -1,0 +1,9 @@
+Analysis of the Loss Function $L_{norm} = (\text{kernel.sum()} - 1)^2$
+Using the loss term $L_{norm} = (\text{kernel.sum()} - 1)^2$ is a standard and correct method to enforce flux conservation in neural networks that learn convolutional kernels (such as PSF models or lensing mappings). 
+
+Enforcing Unity Gain: This loss penalizes the network if the sum of the kernel weights deviates from 1. In signal processing, a kernel with a sum of 1 ensures that the total intensity (flux) of the input signal is preserved in the output after convolution, preventing artificial brightening or dimming.
+Preventing Mass Leakage: By forcing the kernel to sum to 1, you constrain the network to redistribute mass/light within the support of the kernel rather than creating or destroying it. If the kernel sums to less than 1, the network effectively "leaks" flux (mass) out of the system (or outside the crop if the kernel extends beyond boundaries). If it sums to more than 1, it creates flux.
+Limitations regarding Cropping: While this loss prevents the network from changing the total mass globally, it does not strictly prevent mass from moving outside a specific crop boundary if the kernel support extends beyond that crop.
+If the kernel shifts light from the center of the crop to the edges, and the crop cuts off those edges, the measured flux inside the crop will decrease, even if the kernel sum is 1.
+To strictly prevent mass from leaving a crop, you must combine this loss with padding strategies (e.g., reflective or circular padding) that account for flux entering/leaving the boundaries, or ensure the kernel support is fully contained within the analysis region. 
+
