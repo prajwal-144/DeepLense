@@ -8,7 +8,7 @@ and with the lensing/source-plane structure used by the training pipeline.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -206,7 +206,7 @@ class MetricTracker:
         self._values = defaultdict(float)
         self._counts = defaultdict(int)
 
-    def update(self, **metrics: torch.Tensor | float) -> None:
+    def update(self, **metrics: Union[torch.Tensor, float]) -> None:
         for key, value in metrics.items():
             if value is None:
                 continue
