@@ -12,6 +12,13 @@ from torch.utils.tensorboard import SummaryWriter
 # Internal imports
 from differentiable_lensing import DifferentiableLensing
 import data
+from metrics import (
+    MetricTracker,
+    flux_conservation_error,
+    lr_redegradation_error,
+    source_plane_reconstruction_consistency,
+)
+from psf import apply_psf, build_psf_kernel
 from sisr import SISR
 
 # === small helpers ===========================================================
@@ -31,6 +38,14 @@ def wmse_loss(y1, y2, w):
     - Note: no epsilon / stability tweak; if w contains zeros everywhere the mean will be 0 which might be OK.
     """
     return torch.mean((y1-y2)**2*w)
+
+
+def interpolate_image(x, scale_factor, mode):
+    """F.interpolate wrapper with correct align_corners handling."""
+    if mode in {'linear', 'bilinear', 'bicubic', 'trilinear'}:
+        return F.interpolate(x, scale_factor=scale_factor, mode=mode, align_corners=False)
+    return F.interpolate(x, scale_factor=scale_factor, mode=mode)
+
 
 # === argument parsing =======================================================
 def parse_args():
@@ -71,16 +86,67 @@ def parse_args():
                         help='the shape of the (square) image in one axis')
     parser.add_argument('--theta-e', type=float, default=0.75,
                         help='the value of the einstein radius used to compute the deflection field')
+
+    # Stage 2: modular PSF / observation operator options
+    parser.add_argument('--psf-type', type=str, default='gaussian', choices=['none', 'gaussian', 'moffat', 'empirical'],
+                        help='PSF model applied before LR re-degradation')
+    parser.add_argument('--psf-fwhm-arcsec', type=float, default=0.16,
+                        help='PSF FWHM in arcseconds for analytic Gaussian/Moffat kernels')
+    parser.add_argument('--psf-beta', type=float, default=4.765,
+                        help='Moffat beta parameter when --psf-type=moffat')
+    parser.add_argument('--psf-kernel-size', type=int, default=None,
+                        help='optional odd PSF kernel width in pixels')
+    parser.add_argument('--psf-path', type=str, default=None,
+                        help='path to .npy/.npz/.pt/.pth empirical PSF kernel when --psf-type=empirical')
+    parser.add_argument('--psf-ellipticity-q', type=float, default=1.0,
+                        help='minor/major axis ratio for analytic PSFs')
+    parser.add_argument('--psf-angle-deg', type=float, default=0.0,
+                        help='counter-clockwise analytic PSF major-axis angle in degrees')
+    parser.add_argument('--downsample-mode', type=str, default='area', choices=['nearest', 'bilinear', 'bicubic', 'area'],
+                        help='downsampling mode for observation consistency')
+    parser.add_argument('--upsample-mode', type=str, default='bilinear', choices=['nearest', 'bilinear', 'bicubic'],
+                        help='upsampling mode used for interpolation reference in VDL')
     args = parser.parse_args()
 
     # derived args
     args.effective_magnification = int(args.magnification ** args.n_mag)
     args.target_shape = args.image_shape * args.effective_magnification
     args.target_resolution = args.resolution / args.effective_magnification
-    # device choice: OK here, but later code redefines device inconsistently (see below).
     args.device = 'cuda' if args.cuda and torch.cuda.is_available() else 'cpu'
     print('[SYS] Device is set to %s'%args.device)
     return args
+
+
+def build_epoch_metrics(
+    total_loss,
+    image_reconstruction_loss,
+    source_reconstruction_loss,
+    downsampled_image,
+    lr_image,
+    downsampled_source,
+    reconstructed_source,
+    source_convergence_map,
+    image_convergence_map,
+):
+    """Compute Stage-1 physics-aware metrics for one batch."""
+    return {
+        'loss_total': total_loss,
+        'loss_image': image_reconstruction_loss,
+        'loss_source': source_reconstruction_loss,
+        'metric_lr_redegradation': lr_redegradation_error(
+            downsampled_image,
+            lr_image,
+            weight=source_convergence_map,
+        ),
+        'metric_source_consistency': source_plane_reconstruction_consistency(
+            downsampled_source,
+            reconstructed_source,
+            weight=image_convergence_map,
+        ),
+        'metric_flux_lr': flux_conservation_error(lr_image, downsampled_image),
+        'metric_flux_source': flux_conservation_error(reconstructed_source, downsampled_source),
+    }
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -90,7 +156,6 @@ if __name__ == '__main__':
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    # determinism for cuDNN
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
@@ -98,8 +163,6 @@ if __name__ == '__main__':
     BATCH_SIZE = args.batch_size
 
     # --- dataset loading ---------------------------------------------------
-    # The code constructs three datasets and concats them.
-    # data.LensingDataset(root, types, n) — ensure data.LensingDataset handles these args.
     train_dataset_no_sub = data.LensingDataset('train/',['no_sub'],5000)
     val_dataset_no_sub = data.LensingDataset('val/',['no_sub'],2000)
 
@@ -118,16 +181,10 @@ if __name__ == '__main__':
     train_dataloader = torch.utils.data.DataLoader(train_dataset,shuffle=True,batch_size=BATCH_SIZE,num_workers=min(8, os.cpu_count()))
     val_dataloader = torch.utils.data.DataLoader(val_dataset,shuffle=True,batch_size=BATCH_SIZE,num_workers=min(8, os.cpu_count()))
 
-    # NOTE doc comment: "This configuration will load 5000 (low-resolution) images in total"
-    # — but actual counts depend on the LensingDataset and the random_split above.
-
-        # --- model / modules ----------------------------------------------------
-    # Instantiate model and optimizer
+    # --- model / modules ----------------------------------------------------
     model = SISR(magnification=args.magnification, n_mag=args.n_mag, residual_depth=args.residual_depth, in_channels=args.in_channels, latent_channel_count=args.latent_space_size).to(args.device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    # differentiable lensing module: note that the DifferentiableLensing __init__
-    # in the other file accepts `device` and `alpha`. Here alpha=None so internal set_alpha may not be called.
     lensing_module = DifferentiableLensing(device=device, alpha=None, target_resolution=args.target_resolution, target_shape=args.target_shape).to(args.device)
 
     # TensorBoard logging
@@ -139,7 +196,6 @@ if __name__ == '__main__':
         )
 
     # --- load precomputed sparse mappings and maps --------------------------
-    # These files must exist in working dir. They are moved to args.device below.
     cross_grid_to_log = torch.load('scatter_to_log_128.pt').to(args.device)
     cross_grid_forward_from_log = torch.load('forward_from_log_128.pt').to(args.device)
     cross_grid_from_log = torch.load('scatter_from_log_128.pt').to(args.device)
@@ -150,21 +206,32 @@ if __name__ == '__main__':
     image_convergence_map = torch.load('image_convergence_map.pt').to(args.device)
 
     # --- PSF kernel setup ---------------------------------------------------
-    # gaussian_kernel returns (Z, X, Y) as numpy arrays in the previous file.
-    # Converting to torch.tensor is fine but be mindful of dtype/device.
-    psf, _, _ = lensing_module.gaussian_kernel(fwhm_arcsec=0.16, pixscale_arcsec=args.target_resolution)
-    psf = torch.tensor(psf, dtype=torch.float32, device=args.device).unsqueeze(0).unsqueeze(0)
+    psf_kernel = build_psf_kernel(
+        psf_type=args.psf_type,
+        fwhm_arcsec=args.psf_fwhm_arcsec,
+        pixscale_arcsec=args.target_resolution,
+        beta=args.psf_beta,
+        kernel_size=args.psf_kernel_size,
+        path=args.psf_path,
+        ellipticity_q=args.psf_ellipticity_q,
+        angle_deg=args.psf_angle_deg,
+        device=args.device,
+    )
+    if psf_kernel is None:
+        print('[SYS] PSF disabled (--psf-type=none).')
+    else:
+        print('[SYS] Using %s PSF: shape=%s sum=%.6f' % (args.psf_type, tuple(psf_kernel.shape), psf_kernel.sum().item()))
 
     # --- training loop ------------------------------------------------------
     for epoch in range(args.epochs):
-        losses = []
+        model.train()
+        train_metrics = MetricTracker()
+
         for i,lr_image in enumerate(tqdm(train_dataloader, desc=f"Training epoch {epoch+1} of {args.epochs}")):
-            # lr_image shape expectation: (B, 1, H, W) maybe — they call .squeeze(1) below
             lr_image = lr_image.float().to(device).squeeze(1)
 
             # Source reconstruction through backward lensing (using precomputed sparse mapping)
-            # cross_grid_fill expects I_img shaped (B, C, Ix, Iy); ensure lr_image matches.
-            reconstructed_source = lensing_module.cross_grid_fill(lr_image, [cross_grid_backward]) # rename to lensing
+            reconstructed_source = lensing_module.cross_grid_fill(lr_image, [cross_grid_backward])
 
             # Upscaling using a neural network: concatenate source and lr image along channels
             model_feed = torch.cat([reconstructed_source, lr_image], dim=1)
@@ -172,13 +239,12 @@ if __name__ == '__main__':
 
             # Image construction through forward lensing: apply a chain of sparse mappings
             upscaled_image_ = lensing_module.cross_grid_fill(upscaled_source_, [cross_grid_to_log, cross_grid_forward_from_log, cross_grid_from_log])
-            # Convolve with PSF. NOTE: padding='same' requires PyTorch >= 1.11 (or newer); older versions don't accept it.
-            convolved_upscaled_image_ = F.conv2d(upscaled_image_, psf, padding="same")
+            convolved_upscaled_image_ = apply_psf(upscaled_image_, psf_kernel)
 
-            # Downsampling and upsampling:
-            downsampled_image = F.interpolate(convolved_upscaled_image_, scale_factor=1/args.effective_magnification)
-            interpolated_image = F.interpolate(lr_image, scale_factor=args.effective_magnification)
-            downsampled_source = F.interpolate(upscaled_source_, scale_factor=1/args.effective_magnification)
+            # Downsampling and upsampling
+            downsampled_image = interpolate_image(convolved_upscaled_image_, scale_factor=1/args.effective_magnification, mode=args.downsample_mode)
+            interpolated_image = interpolate_image(lr_image, scale_factor=args.effective_magnification, mode=args.upsample_mode)
+            downsampled_source = interpolate_image(upscaled_source_, scale_factor=1/args.effective_magnification, mode=args.downsample_mode)
 
             # Losses: weighted MSE
             image_reconstruction_loss = wmse_loss(downsampled_image, lr_image, source_convergence_map)
@@ -193,48 +259,72 @@ if __name__ == '__main__':
             total_loss.backward()
             opt.step()
 
-            losses.append(total_loss.detach().item())
+            train_metrics.update(**build_epoch_metrics(
+                total_loss=total_loss,
+                image_reconstruction_loss=image_reconstruction_loss,
+                source_reconstruction_loss=source_reconstruction_loss,
+                downsampled_image=downsampled_image,
+                lr_image=lr_image,
+                downsampled_source=downsampled_source,
+                reconstructed_source=reconstructed_source,
+                source_convergence_map=source_convergence_map,
+                image_convergence_map=image_convergence_map,
+            ))
 
         # Logging/tracking after training loop
         if args.log_train:
-            writer.add_scalar("train_loss/total", np.mean(losses), global_step=epoch)
-        print('[SYS] Train loss at epoch %d: %.6f'%(epoch+1, np.mean(losses)))
-                # --- validation loop -------------------------------------------------
-        for i,lr_image in enumerate(tqdm(val_dataloader, desc=f"Validation epoch {epoch+1} of {args.epochs}")):
-            lr_image = lr_image.float().to(device).squeeze(1)
+            for key, value in train_metrics.as_dict().items():
+                writer.add_scalar(f"train/{key}", value, global_step=epoch)
+        print('[SYS] Train epoch %d: %s' % (epoch+1, train_metrics.summary()))
 
-            # Source reconstruction
-            reconstructed_source = lensing_module.cross_grid_fill(lr_image, [cross_grid_backward]) # rename to lensing
+        # --- validation loop -------------------------------------------------
+        model.eval()
+        val_metrics = MetricTracker()
+        with torch.no_grad():
+            for i,lr_image in enumerate(tqdm(val_dataloader, desc=f"Validation epoch {epoch+1} of {args.epochs}")):
+                lr_image = lr_image.float().to(device).squeeze(1)
 
-            # Upscaling
-            model_feed = torch.cat([reconstructed_source, lr_image], dim=1)
-            with torch.no_grad():
+                # Source reconstruction
+                reconstructed_source = lensing_module.cross_grid_fill(lr_image, [cross_grid_backward])
+
+                # Upscaling
+                model_feed = torch.cat([reconstructed_source, lr_image], dim=1)
                 upscaled_source_ = model(model_feed)
 
-            # Image construction
-            upscaled_image_ = lensing_module.cross_grid_fill(upscaled_source_, [cross_grid_to_log, cross_grid_forward_from_log, cross_grid_from_log])
-            convolved_upscaled_image_ = F.conv2d(upscaled_image_, psf, padding="same")
+                # Image construction
+                upscaled_image_ = lensing_module.cross_grid_fill(upscaled_source_, [cross_grid_to_log, cross_grid_forward_from_log, cross_grid_from_log])
+                convolved_upscaled_image_ = apply_psf(upscaled_image_, psf_kernel)
 
-            # Downsampling
-            downsampled_image = F.interpolate(convolved_upscaled_image_, scale_factor=1/args.effective_magnification)
-            interpolated_image = F.interpolate(lr_image, scale_factor=args.effective_magnification)
-            downsampled_source = F.interpolate(upscaled_source_, scale_factor=1/args.effective_magnification)
+                # Downsampling
+                downsampled_image = interpolate_image(convolved_upscaled_image_, scale_factor=1/args.effective_magnification, mode=args.downsample_mode)
+                interpolated_image = interpolate_image(lr_image, scale_factor=args.effective_magnification, mode=args.upsample_mode)
+                downsampled_source = interpolate_image(upscaled_source_, scale_factor=1/args.effective_magnification, mode=args.downsample_mode)
 
-            # Losses
-            image_reconstruction_loss = wmse_loss(downsampled_image, lr_image, source_convergence_map)
-            source_reconstruction_loss = wmse_loss(downsampled_source, reconstructed_source, image_convergence_map)
+                # Losses
+                image_reconstruction_loss = wmse_loss(downsampled_image, lr_image, source_convergence_map)
+                source_reconstruction_loss = wmse_loss(downsampled_source, reconstructed_source, image_convergence_map)
 
-            interpolated_image_vd = lensing_module.compute_variation_density(interpolated_image)
-            convolved_upscaled_image_vd = lensing_module.compute_variation_density(convolved_upscaled_image_)
+                interpolated_image_vd = lensing_module.compute_variation_density(interpolated_image)
+                convolved_upscaled_image_vd = lensing_module.compute_variation_density(convolved_upscaled_image_)
 
-            total_loss = image_reconstruction_loss + source_reconstruction_loss + args.vdl_weight * F.mse_loss(interpolated_image_vd, convolved_upscaled_image_vd)
+                total_loss = image_reconstruction_loss + source_reconstruction_loss + args.vdl_weight * F.mse_loss(interpolated_image_vd, convolved_upscaled_image_vd)
 
-            losses.append(total_loss.detach().item())
+                val_metrics.update(**build_epoch_metrics(
+                    total_loss=total_loss,
+                    image_reconstruction_loss=image_reconstruction_loss,
+                    source_reconstruction_loss=source_reconstruction_loss,
+                    downsampled_image=downsampled_image,
+                    lr_image=lr_image,
+                    downsampled_source=downsampled_source,
+                    reconstructed_source=reconstructed_source,
+                    source_convergence_map=source_convergence_map,
+                    image_convergence_map=image_convergence_map,
+                ))
 
-        # validation logging
         if args.log_train:
-            writer.add_scalar("val_loss/total", np.mean(losses), global_step=i)
-        print('[SYS] Validation loss at epoch %d: %.6f'%(epoch+1, np.mean(losses)))
+            for key, value in val_metrics.as_dict().items():
+                writer.add_scalar(f"val/{key}", value, global_step=epoch)
+        print('[SYS] Validation epoch %d: %s' % (epoch+1, val_metrics.summary()))
 
     # save model weights at the end
     torch.save(model.state_dict(), '%s_weights.pt'%args.exp_name)
