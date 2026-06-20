@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -140,7 +140,7 @@ def moffat_psf_kernel(
     return normalize_kernel(kernel)
 
 
-def load_empirical_psf_kernel(path: str | Path, device=None, dtype=torch.float32) -> torch.Tensor:
+def load_empirical_psf_kernel(path: Union[str, Path], device=None, dtype=torch.float32) -> torch.Tensor:
     """Load a PSF kernel from .npy, .npz, or .pt/.pth and normalize it."""
     path = Path(path)
     if not path.exists():
