@@ -162,8 +162,3 @@ scripts write them into `results/` when you run them.
   the free-form rows answer is how close a model with no parametric assumption
   can get, since that is what real galaxies will need.
 - Point estimates only, no posteriors.
-
-## Acknowledgements
-
-Mentors: Michael Toomey, Pranath Reddy, Sergei Gleyzer, Hamees Sayed.
-Builds on the grid-based unsupervised super-resolution work of Anirudh Shankar.
