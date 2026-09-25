@@ -4,7 +4,7 @@ GSoC 2026, ML4SCI DeepLense. Mid-term submission.
 
 **Prajwal Uday** · [Mid-term blog post](https://medium.com/@uprajwal20/unsupervised-super-resolution-of-gravitational-lensing-images-gsoc-2026-mid-term-ml4sci-584a46d8d946)
 
-## What this does
+## IDEA
 
 Recovers the background galaxy behind a strong gravitational lens from a single
 low-resolution image, with no high-resolution target and no labels.
@@ -123,7 +123,7 @@ results/                   fitted parameters, metrics, figures
 Scripts add `src/` to `sys.path` themselves, so there is nothing to install and
 no package to build.
 
-## Running it
+## Reproduction
 
 Everything runs from the repository root. `--root` points at the folder that
 contains `Model_A/`.
@@ -153,7 +153,7 @@ after a fit is written to disk.
 Checkpoints (`*.pt`) and example dumps (`*.npz`) are not versioned; the training
 scripts write them into `results/` when you run them.
 
-## Known limitations
+## Limitations
 
 - Simulated data only. Nothing here has met real galaxy morphology or a real PSF.
 - One instrument, and one of the two available bands.
