@@ -1,0 +1,51 @@
+{
+ "config": {
+  "root": ".",
+  "split": "val",
+  "classes": [
+   "axion",
+   "cdm",
+   "wdm"
+  ],
+  "n": 2000,
+  "pixel_scale": 0.10593,
+  "psf_fwhm": 0.2,
+  "psf_mode": "empirical",
+  "psf_beta": 2.5,
+  "psf_path": "superres/results/psf_empirical.npy",
+  "supersample": 1,
+  "fit_radius_px": 45.0,
+  "target": "image",
+  "out": "superres/results/fits_img.json",
+  "verbose": false
+ },
+ "fits": "superres/results/fits_img.json",
+ "n": 2000,
+ "by_factor": {
+  "1": {
+   "corr": 0.9842951196138915,
+   "nmse": 0.03088199359590317,
+   "size_ratio": 0.9503633363137534
+  },
+  "2": {
+   "corr": 0.9835237634022398,
+   "nmse": 0.032599940505942726,
+   "size_ratio": 0.9283709764667992
+  },
+  "4": {
+   "corr": 0.9832154039660892,
+   "nmse": 0.03352868810143081,
+   "size_ratio": 0.912391936629216
+  },
+  "8": {
+   "corr": 0.983031765595024,
+   "nmse": 0.033615967635286396,
+   "size_ratio": 0.9064852361359854
+  }
+ },
+ "mu_ring_median": 6.237359398672844,
+ "check_1x_vs_stored_unlensed": {
+  "corr": 0.9915270594370686,
+  "size_ratio": 1.062434025047601
+ }
+}
